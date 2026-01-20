@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/leroysb/go_kubernetes/internal/api/auth"
 	"github.com/leroysb/go_kubernetes/internal/api/handlers"
 	"github.com/leroysb/go_kubernetes/internal/database"
 )
@@ -41,19 +42,14 @@ func SetupRoutes(app *fiber.App) {
 	api.Get("/orders", handlers.GetOrders)
 	api.Post("/orders", handlers.CreateOrder)
 
-	// Private API endpoints
-	api.Post("/customers/cart", handlers.CreateCart)
-	api.Get("/customers/cart", handlers.GetCart)
-	api.Put("/customers/cart/:id", handlers.UpdateCart)
-	api.Delete("/customers/cart/:id", handlers.DeleteCart)
-	api.Post("/customers/orders/:id", handlers.CreateOrder)
-	// api.Get("/customers/me", auth.AuthMiddleware(handlers.GetCustomer))
-	// api.Post("/customers/logout", auth.AuthMiddleware(handlers.Logout))
-	// api.Post("/customers/cart", auth.AuthMiddleware(handlers.CreateCart))
-	// api.Get("/customers/cart", auth.AuthMiddleware(handlers.GetCart))
-	// api.Put("/customers/cart/:id", auth.AuthMiddleware(handlers.UpdateCart))
-	// api.Delete("/customers/cart/:id", auth.AuthMiddleware(handlers.DeleteCart))
-	// api.Post("/customers/orders/:id", auth.AuthMiddleware(handlers.CreateOrder))
+	// Private API endpoints (protected via Hydra middleware)
+	api.Get("/customers/me", auth.AuthMiddleware(handlers.GetCustomer))
+	api.Post("/customers/logout", auth.AuthMiddleware(handlers.Logout))
+	api.Post("/customers/cart", auth.AuthMiddleware(handlers.CreateCart))
+	api.Get("/customers/cart", auth.AuthMiddleware(handlers.GetCart))
+	api.Put("/customers/cart/:id", auth.AuthMiddleware(handlers.UpdateCart))
+	api.Delete("/customers/cart/:id", auth.AuthMiddleware(handlers.DeleteCart))
+	api.Post("/customers/orders/:id", auth.AuthMiddleware(handlers.CreateOrder))
 
 	// 404 Handler
 	app.Use(notFoundHandler)

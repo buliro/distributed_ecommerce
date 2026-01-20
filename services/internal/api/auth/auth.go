@@ -1,10 +1,10 @@
 package auth
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,199 +13,126 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-var requiredScope = os.Getenv("requiredScope")
-var hydraAdminUrl = os.Getenv("hydraAdminUrl")
+var (
+	requiredScope   = os.Getenv("REQUIRED_SCOPE")
+	hydraAdminURL   = os.Getenv("HYDRA_ADMIN_URL")
+	hydraTokenURL   = os.Getenv("HYDRA_TOKEN_URL")
+	hydraClientID   = os.Getenv("HYDRA_CLIENT_ID")
+	hydraClientSecret = os.Getenv("HYDRA_CLIENT_SECRET")
+	hydraScope      = os.Getenv("HYDRA_SCOPE")
+)
 
-// HydraClientResponse communicates with the Hydra admin API to create a new OAuth2 client
+// GetAccessToken requests an access token from ORY Hydra using client credentials
 func GetAccessToken() (string, error) {
-	var clientURL = os.Getenv("HYDRA_CLIENT_URL")
-	var tokenURL = os.Getenv("HYDRA_TOKEN_URL")
-	var scope = os.Getenv("HYDRA_SCOPE")
-	var clientName = os.Getenv("HYDRA_CLIENT_NAME")
-	var clientSecret = os.Getenv("HYDRA_CLIENT_SECRET")
-
-	client := &http.Client{}
-
-	var clientRequest = ClientRequest{
-		ClientName:        clientName,
-		ClientSecret:      clientSecret,
-		GrantTypes:        []string{"authorization_code", "refresh_token"},
-		Scope:             scope,
-		TokenEndpointAuth: "none",
+	if hydraTokenURL == "" || hydraClientID == "" || hydraClientSecret == "" {
+		return "", errors.New("hydra client credentials are not configured")
 	}
 
-	clientRequestBody, err := json.Marshal(clientRequest)
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	if hydraScope != "" {
+		form.Set("scope", hydraScope)
+	}
+
+	req, err := http.NewRequest("POST", hydraTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		fmt.Println("Error marshalling client id request:", err)
-		return "", err
+		return "", fmt.Errorf("creating hydra token request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(hydraClientID, hydraClientSecret)
 
-	// create the HTTP request
-	clientReq, err := http.NewRequest("POST", clientURL, bytes.NewBuffer(clientRequestBody))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Println("Error creating client id request:", err)
-		return "", err
+		return "", fmt.Errorf("sending hydra token request: %w", err)
 	}
+	defer resp.Body.Close()
 
-	// set the request headers
-	clientReq.Header.Set("Content-Type", "application/json")
-	// req.Header.Set("Accept", "*/*")
-	// req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	// req.Header.Set("Connection", "keep-alive")
-
-	// send the request
-	clientResp, err := client.Do(clientReq)
-	if err != nil {
-		fmt.Println("Error sending client id request:", err)
-		return "", err
-	}
-	defer clientResp.Body.Close()
-
-	if clientResp.StatusCode != http.StatusOK {
-		return "", errors.New("client id creation failed. unexpected status code")
-	}
-
-	var clientResponse ClientResponse
-	if err := json.NewDecoder(clientResp.Body).Decode(&clientResponse); err != nil {
-		fmt.Println("Error decoding client id response:", err)
-		return "", err
-	}
-
-	// TO-DO: Delete
-	fmt.Println("Client ID:", clientResponse.ClientID)
-
-	var tokenRequest = TokenRequest{
-		ClientID:  clientResponse.ClientID,
-		GrantType: "client_credentials",
-		// ClientSecret: clientSecret,
-		// Scope:        scope,
-	}
-
-	var tokenRequestBody []byte
-	tokenRequestBody, err = json.Marshal(tokenRequest)
-	if err != nil {
-		fmt.Println("Error marshalling token request:", err)
-		return "", err
-	}
-
-	// create the HTTP request for token creation
-	var tokenReq *http.Request
-	tokenReq, err = http.NewRequest("POST", tokenURL, bytes.NewBuffer(tokenRequestBody))
-	if err != nil {
-		fmt.Println("Error creating token request:", err)
-		return "", err
-	}
-
-	// set the request headers
-	tokenReq.Header.Set("Content-Type", "application/json")
-	// tokenReq.Header.Set("Accept", "*/*")
-	// tokenReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	// tokenReq.Header.Set("Connection", "keep-alive")
-
-	var tokenResp *http.Response
-	tokenResp, err = client.Do(tokenReq)
-	if err != nil {
-		fmt.Println("Error sending token request:", err)
-		return "", err
-	}
-	defer tokenResp.Body.Close()
-
-	if tokenResp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("hydra token endpoint returned status %d", resp.StatusCode)
 		return "", errors.New("token creation failed")
 	}
 
 	var tokenResponse TokenResponse
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenResponse); err != nil {
-		fmt.Println("Error decoding token response:", err)
-		return "", err
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
+		return "", fmt.Errorf("decoding hydra token response: %w", err)
 	}
 
-	// TO-DO: Delete
-	fmt.Println("Access Token:", tokenResponse.AccessToken)
+	if tokenResponse.AccessToken == "" {
+		return "", errors.New("received empty access token from hydra")
+	}
 
 	return tokenResponse.AccessToken, nil
 }
 
 // introspectToken sends a request to the Hydra introspection endpoint to validate the access token
 func introspectToken(accessToken string) (*TokenInfo, error) {
-	// Prepare the form data
+	if hydraAdminURL == "" {
+		return nil, errors.New("hydra admin URL is not configured")
+	}
+
 	formData := url.Values{}
 	formData.Set("token", accessToken)
-	formData.Set("scope", requiredScope)
 
-	// Create the HTTP request
-	req, err := http.NewRequest("POST", hydraAdminUrl, strings.NewReader(formData.Encode()))
+	req, err := http.NewRequest("POST", hydraAdminURL, strings.NewReader(formData.Encode()))
 	if err != nil {
-		fmt.Println("Error creating introspection request:", err)
-		return nil, err
+		return nil, fmt.Errorf("creating introspection request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(hydraClientID, hydraClientSecret)
 
-	// Send the request
 	introspectResp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Println("Error sending introspection request:", err)
-		return nil, err
+		return nil, fmt.Errorf("sending introspection request: %w", err)
 	}
 	defer introspectResp.Body.Close()
 
-	// Check the response status code
 	if introspectResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("introspection failed with status code %d", introspectResp.StatusCode)
 	}
 
-	// Parse introspection response
 	var tokenInfo TokenInfo
 	if err := json.NewDecoder(introspectResp.Body).Decode(&tokenInfo); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decoding introspection response: %w", err)
 	}
 
 	return &tokenInfo, nil
 }
 
-// checkTokenActive checks if the introspected token is active
-func hasScope(tokenScope string, requiredScope string) bool {
+func hasScope(tokenScope string, required string) bool {
+	if required == "" {
+		return true
+	}
+
 	scopes := strings.Split(tokenScope, " ")
 	for _, scope := range scopes {
-		if scope == requiredScope {
+		if scope == required {
 			return true
 		}
 	}
 	return false
 }
 
-// AuthMiddleware is a middleware function to validate access token using Hydra introspection endpoint
+// AuthMiddleware validates access tokens issued by Hydra
 func AuthMiddleware(next fiber.Handler) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Get the access token from the request headers
 		authHeader := c.Get("Authorization")
-
-		// Check if Authorization header is missing or does not start with "Bearer "
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 		}
 
-		// Extract the token by stripping the "Bearer " prefix
 		accessToken := strings.TrimPrefix(authHeader, "Bearer ")
-
-		// Introspect the token
 		tokenInfo, err := introspectToken(accessToken)
-		if err != nil || !tokenInfo.Active {
-			fmt.Println("Error during token introspection:", err)
-			// return err
+		if err != nil || tokenInfo == nil || !tokenInfo.Active {
+			log.Printf("token introspection failed: %v", err)
 			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
 		}
 
-		// Check if the token is active
 		if !hasScope(tokenInfo.Scope, requiredScope) {
-			// If token is not active or not present, return unauthorized error
-			fmt.Printf("Insufficient scope: %v\n", err)
-			// return err
+			log.Printf("token missing required scope %s", requiredScope)
 			return c.Status(http.StatusForbidden).JSON(fiber.Map{"error": "Insufficient scope"})
 		}
 
-		// Proceed to the next middleware or handler if token is valid
-		return c.Next()
+		return next(c)
 	}
 }
