@@ -23,7 +23,22 @@ var (
 	hydraClientID     = os.Getenv("HYDRA_CLIENT_ID")
 	hydraClientSecret = os.Getenv("HYDRA_CLIENT_SECRET")
 	hydraScope        = os.Getenv("HYDRA_SCOPE")
+	introspectFunc    = introspectToken
 )
+
+// SetRequiredScope allows tests to override the required scope dynamically.
+func SetRequiredScope(scope string) {
+	requiredScope = scope
+}
+
+// SetIntrospectFunc allows tests to stub the token introspection behavior.
+func SetIntrospectFunc(fn func(string) (*TokenInfo, error)) {
+	if fn == nil {
+		introspectFunc = introspectToken
+		return
+	}
+	introspectFunc = fn
+}
 
 // GetAccessToken requests an access token from ORY Hydra using client credentials
 func GetAccessToken() (string, error) {
@@ -125,7 +140,7 @@ func AuthMiddleware(next fiber.Handler) fiber.Handler {
 		}
 
 		accessToken := strings.TrimPrefix(authHeader, "Bearer ")
-		tokenInfo, err := introspectToken(accessToken)
+		tokenInfo, err := introspectFunc(accessToken)
 		if err != nil || tokenInfo == nil || !tokenInfo.Active {
 			log.Printf("token introspection failed: %v", err)
 			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})

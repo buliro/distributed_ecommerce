@@ -4,10 +4,10 @@ services:
   go_app:
     container_name: go_app
     build:
-      context: .
+      context: ../services
       dockerfile: ../docker/Dockerfile
     env_file:
-      - .env
+      - ../services/.env
     environment:
       HYDRA_TOKEN_URL: ${HYDRA_TOKEN_URL:-http://hydra:4444/oauth2/token}
       HYDRA_ADMIN_URL: ${HYDRA_ADMIN_URL:-http://hydra:4445/admin/oauth2/introspect}
@@ -82,7 +82,7 @@ services:
       hydra-migrate:
         condition: service_completed_successfully
     env_file:
-      - .env
+      - ../services/.env
     environment:
       DSN: postgres://hydra:hydra-secret@hydra-db:5432/hydra?sslmode=disable
       SECRETS_SYSTEM: ${HYDRA_SYSTEM_SECRET:-change-me-system}
@@ -122,7 +122,7 @@ services:
       hydra:
         condition: service_healthy
     env_file:
-      - .env
+      - ../services/.env
     entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e

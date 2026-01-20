@@ -50,7 +50,11 @@ func Client() *redis.Client {
 // Close releases the Redis client resources when shutting down the application.
 func Close() error {
 	if client == nil {
+		initOnce = sync.Once{}
 		return nil
 	}
-	return client.Close()
+	err := client.Close()
+	client = nil
+	initOnce = sync.Once{}
+	return err
 }

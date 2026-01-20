@@ -1,8 +1,8 @@
 package tests
 
 import (
-	"io"
-	"net/http"
+	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -24,13 +24,14 @@ func (suite *HealthCheckTestSuite) SetupTest() {
 }
 
 func (suite *HealthCheckTestSuite) TestHealthCheck() {
-	c := http.Client{}
-	req, _ := http.NewRequest("GET", "http://localhost:8080/api/v1/status", nil)
-	resp, _ := c.Do(req)
-
+	req := httptest.NewRequest("GET", "/api/v1/status", nil)
+	resp, err := suite.app.Test(req, -1)
+	suite.Require().NoError(err)
 	assert.Equal(suite.T(), 200, resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
-	assert.JSONEq(suite.T(), `{"Postgres": "OK"}`, string(body))
+	defer resp.Body.Close()
+	var payload map[string]string
+	json.NewDecoder(resp.Body).Decode(&payload)
+	assert.Equal(suite.T(), "OK", payload["Postgres"])
 }
 
 func TestHealthCheckTestSuite(t *testing.T) {

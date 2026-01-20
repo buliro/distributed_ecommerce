@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 FROM golang:1.23-alpine AS base
 
 WORKDIR /src
@@ -7,12 +5,14 @@ WORKDIR /src
 ENV GOPROXY=https://proxy.golang.org,direct \
     GOSUMDB=sum.golang.org
 
-RUN --mount=type=cache,target=/var/cache/apk \
-    --mount=type=cache,target=/var/lib/apk \
-    apk add --no-cache ca-certificates tzdata git
+RUN apk add --no-cache ca-certificates tzdata git
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN /bin/sh -c 'set -e; for attempt in 1 2 3; do \
+        go mod download && exit 0; \
+        echo "go mod download failed (attempt ${attempt}), retrying..." >&2; \
+        sleep $((attempt * 5)); \
+    done; exit 1'
 
 COPY . .
 
@@ -26,14 +26,14 @@ RUN mkdir -p /out && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /out/api ./cmd/main.go
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.20 AS runtime
+
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
 COPY --from=builder /out/api ./api
 
 EXPOSE 8080
-
-USER nonroot:nonroot
 
 ENTRYPOINT ["./api"]

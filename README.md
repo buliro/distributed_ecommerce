@@ -10,14 +10,19 @@ This project is an ecommerce API developed using Golang and docker containers. I
 
 3. **Navigate to the project directory**: `cd distributed_ecommerce`
 
-4. **Configure environment variables**: Copy `services/public.env` (or the provided sample file) to `services/.env` and populate credentials such as Africa's Talking keys, database details, and API port.
+4. **Configure environment variables**: Copy `services/.env.example` to `services/.env` and populate credentials such as Africa's Talking keys, database details, Redis settings, and Hydra client secrets.
 
 5. **Start local stack with Docker Compose**:
    ```bash
-   cd services
-   docker compose up --build
+   docker compose -f docker/docker-compose.yml up --build --detach
    ```
-   The compose file (and the `docker/Dockerfile` it references) will build the Go API and run the auxiliary services required for development.
+   This builds the Go API from the `services` module and starts Hydra, PostgreSQL, Redis, and the API container. When you are done, run `docker compose -f docker/docker-compose.yml down` to stop everything.
+
+6. **Run tests locally** (optional but recommended):
+   ```bash
+   cd services
+   go test ./...
+   ```
 
 ## Usage
 You can interact with the API through the command line in a bash terminal. See [Examples](#examples) for more.
@@ -27,11 +32,44 @@ You can interact with the API through the command line in a bash terminal. See [
 
 2. **Kubernetes Integration**: The application is designed to be deployed on a Kubernetes cluster, providing robust orchestration capabilities such as automated rollouts, rollbacks, service discovery, and load balancing.
 
-3. **ORY Hydra Integration**: The project integrates with ORY Hydra, an OAuth 2.0 and OpenID Connect provider, to handle authentication and authorization, ensuring secure access to your application.
+3. **Hybrid OAuth + Redis Authorization**: The project integrates with ORY Hydra for token issuance and introspection, while Redis-backed sessions hydrate user context for the API to enforce fine-grained, customer-aware authorization.
 
 4. **PostgreSQL Database**: The application uses a PostgreSQL database for data storage, providing a powerful, open-source object-relational database system with a strong reputation for reliability, data integrity, and correctness.
 
 5. **Africa's Talking API Integration**: The project uses the Africa's Talking API to send SMS notifications to customers when they place an order, enhancing the user experience and providing real-time updates.
+
+## Hybrid Authentication Overview
+
+To keep the authorization rules simple for developers while retaining Hydra’s token lifecycle guarantees, the API combines Hydra with Redis-backed session storage:
+
+```mermaid
+flowchart LR
+    Client[Client App] -->|1. Login request| API{Go API}
+    API -->|2. Validate credentials
+    (Postgres)| DB[(PostgreSQL)]
+    API -->|3. Request access token| Hydra[[ORY Hydra]]
+    Hydra -->|4. Issue token| API
+    API -->|5. Store user+token| Redis[(Redis)]
+    Client -->|6. Call private endpoint
+    with Bearer token| API
+    API -->|7. Introspect token| Hydra
+    API -->|8. Hydrate user context| Redis
+    API -->|9. Authorized response| Client
+```
+
+### Login & Request Flow
+
+1. **User credentials validated** against PostgreSQL.
+2. **Hydra issues an access token** via the client-credentials grant configured for the API.
+3. **Redis session created** mapping token → customer profile (ID, phone, name) with a configurable TTL (`SESSION_TTL_SECONDS`).
+4. **Auth middleware** introspects the incoming token with Hydra, then loads the user context from Redis before passing control to protected handlers.
+5. **Logout or TTL expiry** removes the session entry from Redis, immediately revoking access for that token even if Hydra still considers it active.
+
+### Operational Notes
+
+- Redis connection details are configured through `REDIS_ADDR`, `REDIS_PASSWORD`, and `SESSION_TTL_SECONDS` in `services/.env`.
+- Middleware exposes the hydrated customer on `c.Locals("user")`, and retains the token on `c.Locals("token")` for downstream handlers such as logout.
+- Integration tests under `services/internal/tests` use `miniredis` to simulate the flow during `go test`.
 
 ## Deployment Requirements
 - **Container Registry**: Docker Hub, ECR, or another OCI-compliant registry with push access for the Jenkins pipeline.
@@ -121,9 +159,21 @@ Get the currently logged in customer without authentication
 curl -XGET 0.0.0.0:8080/api/v1/customers/me
 ```
 
-Authenticate an existing customer
+Authenticate an existing customer (stores token + customer in Redis)
 ```
 curl -X POST -H "Content-Type: application/json" -d '{"phone": "+254700123456", "password": "secret"}' 0.0.0.0:8080/api/v1/customers/login
+```
+
+Access a protected endpoint with the issued token
+```
+curl -H "Authorization: Bearer <access_token>" 0.0.0.0:8080/api/v1/customers/me
+```
+
+Revoke the session (removes Redis entry) and confirm access is lost
+```
+curl -X POST -H "Authorization: Bearer <access_token>" 0.0.0.0:8080/api/v1/customers/logout
+curl -H "Authorization: Bearer <access_token>" 0.0.0.0:8080/api/v1/customers/me
+# → 401 Session expired
 ```
 
 ## Contributing
