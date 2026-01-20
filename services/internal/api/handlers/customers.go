@@ -1,15 +1,18 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/leroysb/go_kubernetes/internal/api/auth"
+	"github.com/leroysb/go_kubernetes/internal/cache"
 	"github.com/leroysb/go_kubernetes/internal/database"
 	"github.com/leroysb/go_kubernetes/internal/database/models"
 	"github.com/leroysb/go_kubernetes/internal/sms"
@@ -127,23 +130,37 @@ func Login(c *fiber.Ctx) error {
 
 	// Execute GetAccessToken function to get the access token
 	accessToken, err := auth.GetAccessToken()
-
-	// Extract access token from response
-	if accessToken == "" {
-		fmt.Println("Access token not found in Hydra token creation response")
-		return c.Status(500).JSON(fiber.Map{"error": "Internal server error"})
+	if err != nil {
+		log.Printf("Error getting access token: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
 	}
 
-	if err != nil {
-		fmt.Println("Error getting access token:", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Internal server error"})
+	if accessToken == "" {
+		log.Println("Access token not found in Hydra token creation response")
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+	}
+
+	sessionCtx := c.UserContext()
+	if sessionCtx == nil {
+		sessionCtx = context.Background()
+	}
+
+	session := cache.SessionData{
+		CustomerID: user.ID,
+		Phone:      user.Phone,
+		Name:       user.Name,
+	}
+
+	if err := cache.StoreSession(sessionCtx, accessToken, session); err != nil {
+		log.Printf("failed to store session: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
 	}
 
 	// Set the access token in the response headers
 	c.Set("Authorization", "Bearer "+accessToken)
 
 	// Return a success message
-	return c.Status(400).JSON(fiber.Map{
+	return c.Status(http.StatusOK).JSON(fiber.Map{
 		"message":      "Login successful",
 		"access_token": accessToken,
 		"token_type":   "bearer",
@@ -160,8 +177,22 @@ func GetCustomer(c *fiber.Ctx) error {
 }
 
 func Logout(c *fiber.Ctx) error {
-	// customer := new(models.Customer)
-	return nil
+	ctx := c.UserContext()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	token, ok := c.Locals("token").(string)
+	if !ok || token == "" {
+		return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid session"})
+	}
+
+	if err := cache.DeleteSession(ctx, token); err != nil {
+		log.Printf("failed to delete session: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+	}
+
+	return c.Status(http.StatusOK).JSON(fiber.Map{"message": "Logout successful"})
 }
 
 func CreateCart(c *fiber.Ctx) error {

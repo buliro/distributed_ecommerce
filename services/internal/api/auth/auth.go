@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,15 +12,17 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/leroysb/go_kubernetes/internal/cache"
+	"github.com/leroysb/go_kubernetes/internal/database/models"
 )
 
 var (
-	requiredScope   = os.Getenv("REQUIRED_SCOPE")
-	hydraAdminURL   = os.Getenv("HYDRA_ADMIN_URL")
-	hydraTokenURL   = os.Getenv("HYDRA_TOKEN_URL")
-	hydraClientID   = os.Getenv("HYDRA_CLIENT_ID")
+	requiredScope     = os.Getenv("REQUIRED_SCOPE")
+	hydraAdminURL     = os.Getenv("HYDRA_ADMIN_URL")
+	hydraTokenURL     = os.Getenv("HYDRA_TOKEN_URL")
+	hydraClientID     = os.Getenv("HYDRA_CLIENT_ID")
 	hydraClientSecret = os.Getenv("HYDRA_CLIENT_SECRET")
-	hydraScope      = os.Getenv("HYDRA_SCOPE")
+	hydraScope        = os.Getenv("HYDRA_SCOPE")
 )
 
 // GetAccessToken requests an access token from ORY Hydra using client credentials
@@ -132,6 +135,30 @@ func AuthMiddleware(next fiber.Handler) fiber.Handler {
 			log.Printf("token missing required scope %s", requiredScope)
 			return c.Status(http.StatusForbidden).JSON(fiber.Map{"error": "Insufficient scope"})
 		}
+
+		sessionCtx := c.UserContext()
+		if sessionCtx == nil {
+			sessionCtx = context.Background()
+		}
+
+		session, err := cache.FetchSession(sessionCtx, accessToken)
+		if err != nil {
+			log.Printf("failed to fetch session: %v", err)
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Internal server error"})
+		}
+
+		if session == nil {
+			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "Session expired"})
+		}
+
+		customer := &models.Customer{
+			Name:  session.Name,
+			Phone: session.Phone,
+		}
+		customer.ID = session.CustomerID
+
+		c.Locals("user", customer)
+		c.Locals("token", accessToken)
 
 		return next(c)
 	}

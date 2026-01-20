@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 	"github.com/leroysb/go_kubernetes/internal/api/routes"
+	"github.com/leroysb/go_kubernetes/internal/cache"
 	"github.com/leroysb/go_kubernetes/internal/database"
 )
 
@@ -20,6 +21,10 @@ func main() {
 
 	// Connect to database
 	database.ConnectDB()
+
+	if err := cache.InitRedis(); err != nil {
+		log.Fatalf("failed to initialize redis: %v", err)
+	}
 
 	// Initialize Fiber app
 	app := fiber.New()

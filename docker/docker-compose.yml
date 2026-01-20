@@ -15,11 +15,16 @@ services:
       HYDRA_CLIENT_SECRET: ${HYDRA_CLIENT_SECRET:-ecommerce-secret}
       HYDRA_SCOPE: ${HYDRA_SCOPE:-api}
       REQUIRED_SCOPE: ${REQUIRED_SCOPE:-api}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-3600}
     ports:
       - "8080:8080"
     depends_on:
       go_db:
         condition: service_healthy
+      redis:
+        condition: service_started
       hydra:
         condition: service_healthy
       hydra-client:
@@ -135,6 +140,13 @@ services:
         --scope "$${HYDRA_SCOPE:-api}" \
         --token-endpoint-auth-method client_secret_basic \
         --format json >/tmp/client.json
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
 
 volumes:
   pgdata:
