@@ -4,17 +4,20 @@
 This project is an ecommerce API developed using Golang and docker containers. Its purpose is to provide a hands-on experience in building a scalable and efficient ecommerce platform. By using Golang, we aim to leverage its performance and concurrency features. The project is designed to handle various aspects of an ecommerce platform, including product management, order processing, and customer management. With the use of containers, we ensure easy deployment and scalability of the application.
 
 ## Installation
-1. **Requirements**: Before starting, ensure that you have Docker version 25.0.3 and Go version 1.22 installed on your machine. These are necessary to build and run the project.
+1. **Requirements**: Install Docker (minimum 25.0.3), Docker Compose plugin, and Go 1.23+. These tools are used for local builds and testing.
 
-2. **Clone the main repository**: Use the command `git clone http://github.com/leroysb/go_kubernetes.git` to clone the main project repository to your local machine.
+2. **Clone the repository**: `git clone https://github.com/buliro/distributed_ecommerce.git`
 
-3. **Navigate to the project directory**: Use the command `cd go_kubernetes` to change your current directory to the project's root directory.
+3. **Navigate to the project directory**: `cd distributed_ecommerce`
 
-4. **Clone the Hydra repository**: The project also requires the ORY Hydra OAuth2 and OpenID Connect server. Use the command `git clone https://github.com/ory/hydra.git` to clone this repository into the project's root directory.
+4. **Configure environment variables**: Copy `services/public.env` (or the provided sample file) to `services/.env` and populate credentials such as Africa's Talking keys, database details, and API port.
 
-5. **Update environment variables**: rename the file `public.env` to `.env`. Head over to [Africa's Talking](https://developers.africastalking.com) and log into your account. If you do not have an account, sign up then obtain the necessary credentials such as username, apiKey, and shortcode. Update the missing values in your `.env`.
-
-6. **Build and run the project with Docker Compose**: Use the command `docker compose -f docker-compose.yml -f hydra/quickstart.yml up --build` to start the project. This command tells Docker Compose to build and run the Docker containers defined in the `docker-compose.yml`, `hydra/quickstart.yml`, and `hydra/quickstart-postgres.yml` files.
+5. **Start local stack with Docker Compose**:
+   ```bash
+   cd services
+   docker compose up --build
+   ```
+   The compose file (and the `docker/Dockerfile` it references) will build the Go API and run the auxiliary services required for development.
 
 ## Usage
 You can interact with the API through the command line in a bash terminal. See [Examples](#examples) for more.
@@ -29,6 +32,68 @@ You can interact with the API through the command line in a bash terminal. See [
 4. **PostgreSQL Database**: The application uses a PostgreSQL database for data storage, providing a powerful, open-source object-relational database system with a strong reputation for reliability, data integrity, and correctness.
 
 5. **Africa's Talking API Integration**: The project uses the Africa's Talking API to send SMS notifications to customers when they place an order, enhancing the user experience and providing real-time updates.
+
+## Deployment Requirements
+- **Container Registry**: Docker Hub, ECR, or another OCI-compliant registry with push access for the Jenkins pipeline.
+- **Kubernetes Cluster**: Kubernetes ≥1.27 with `kubectl` configured locally. Create a namespace (default manifests target `ecommerce`).
+- **Runtime Secrets**: Database credentials and any third-party API keys must be provisioned via Kubernetes secrets (see `k8s/secret.yaml`).
+- **Image Pull Secret**: `registry-cred` Kubernetes secret configured with your registry credentials so the cluster can pull the published image.
+- **Jenkins Agent Tooling**: Docker CLI, kubectl, and Go toolchain installed on the Jenkins build agent. Jenkins credentials named `dockerhub-credentials` and `kubeconfig` are expected by the pipeline.
+
+## Deployment Steps
+1. **Build and Push the Image**
+   ```bash
+   docker build -f docker/Dockerfile -t <registry>/<repo>/ecommerce-api:$(git rev-parse --short HEAD) services
+   docker push <registry>/<repo>/ecommerce-api:$(git rev-parse --short HEAD)
+   docker tag <registry>/<repo>/ecommerce-api:$(git rev-parse --short HEAD) <registry>/<repo>/ecommerce-api:latest
+   docker push <registry>/<repo>/ecommerce-api:latest
+   ```
+
+2. **Prepare Kubernetes Resources**
+   ```bash
+   kubectl apply -f k8s/namespace.yaml
+   kubectl create secret docker-registry registry-cred \
+     --docker-server=<registry> \
+     --docker-username=<user> \
+     --docker-password=<token> \
+     --namespace ecommerce
+   kubectl apply -f k8s/config.yaml
+   kubectl apply -f k8s/secret.yaml
+   ```
+
+3. **Deploy the API**
+   ```bash
+   kubectl apply -f k8s/deployment.yaml
+   kubectl apply -f k8s/service.yaml
+   kubectl -n ecommerce rollout status deploy/ecommerce-api
+   ```
+
+4. **Configure Jenkins CI/CD**
+   - Create/verify credentials `dockerhub-credentials` (registry user/token) and `kubeconfig` (service-account kubeconfig scoped to `ecommerce`).
+   - Create a Pipeline job pointing to this repository so it picks up the `Jenkinsfile` in the project root.
+   - Configure the GitHub webhook to call `https://<jenkins-host>/github-webhook/` on push events.
+
+5. **Monitor and Verify**
+   ```bash
+   kubectl -n ecommerce get pods
+   kubectl -n ecommerce logs -f deploy/ecommerce-api
+   kubectl -n ecommerce port-forward svc/ecommerce-api 8080:80
+   curl http://localhost:8080/api/v1/status
+   ```
+
+Troubleshooting tips for common issues (image pull errors, failed probes, RBAC) are covered in the Jenkinsfile comments and Kubernetes manifests; ensure probes succeed before routing traffic.
+
+## Post-Deployment Verification
+- Check rollout history: `kubectl -n ecommerce rollout history deploy/ecommerce-api`
+- Inspect pod details: `kubectl -n ecommerce describe pod <pod-name>`
+- View application logs: `kubectl -n ecommerce logs -l app=ecommerce-api --tail=100`
+- Smoke test API via port-forward (example for `/status` endpoint shown above).
+
+## Troubleshooting
+- **ImagePullBackOff**: Confirm `registry-cred` secret exists and Jenkins pushed the correct tag (inspect pod events via `kubectl describe`).
+- **Failed Readiness/Liveness Probes**: Verify database connectivity and environment variables defined in `k8s/config.yaml` / `k8s/secret.yaml`. Adjust `initialDelaySeconds` if migrations take longer.
+- **RBAC or Kubeconfig Issues**: Ensure the service account referenced by the Jenkins kubeconfig has permissions to `get`, `list`, `watch`, and `patch` deployments in the `ecommerce` namespace (`kubectl auth can-i patch deployment --as <service-account>`).
+- **Database Connection Errors**: Confirm Postgres service is reachable (`kubectl -n ecommerce exec <pod> -- nc -zv postgres.ecommerce.svc.cluster.local 5432`).
 
 ## Examples
 Check API status
